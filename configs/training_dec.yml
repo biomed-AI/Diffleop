@@ -1,0 +1,78 @@
+data:
+  name: leop_dec
+  path: ./data/demo/dec
+  transform:
+    ligand_atom_mode: basic
+    ligand_bond_mode: fc
+    random_rot: False
+
+model:
+  model_mean_type: C0  # ['noise', 'C0']
+
+  beta_schedule: sigmoid
+  beta_start: 1.e-7
+  beta_end: 2.e-3
+  v_beta_schedule: cosine
+  v_beta_s: 0.01
+  num_diffusion_timesteps: 1000
+
+  v_mode: categorical
+  v_net_type: mlp
+  loss_pos_type: mse  # ['mse', 'kl']
+  sample_time_method: symmetric  # ['importance', 'symmetric']
+
+  bond_diffusion: True
+  bond_net_type: lin
+  num_bond_classes: 5
+  h_node_in_bond_net: True
+
+  time_emb_dim: 0
+  time_emb_mode: simple
+
+  node_indicator: True
+  model_type: uni_o2_bond
+  num_blocks: 1
+  num_layers: 6
+  hidden_dim: 128
+  n_heads: 16
+  edge_feat_dim: 4  # edge type feat
+  num_r_gaussian: 20
+  knn: 32 # !
+  act_fn: relu
+  norm: True
+  cutoff_mode: knn  # [radius, none]
+  r_max: 10.
+  x2h_out_fc: False
+  sync_twoup: False
+
+train:
+  use_load: False
+  ckpt: null
+
+  seed: 2024
+  loss_weights:
+    pos: 1.0
+    v: 100.0
+    bond: 100.0
+    aff: 1.0
+
+  batch_size: 2
+  num_workers: 0
+  n_acc_batch: 1
+  max_iters: 1000000 # 500000
+  val_freq: 20000 # 4000
+  pos_noise_std: 0.1
+  prior_noise_std: 0.5
+  max_grad_norm: 8.0
+  bond_loss_weight: 1.0
+  optimizer:
+    type: adam
+    lr: 5.e-4
+    weight_decay: 0
+    beta1: 0.95
+    beta2: 0.999
+  scheduler:
+    type: plateau
+    factor: 0.6
+    patience: 10
+    min_lr: 1.e-6

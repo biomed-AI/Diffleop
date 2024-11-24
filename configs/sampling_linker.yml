@@ -1,0 +1,18 @@
+data:
+  name: leop_linker
+  path: ./data/demo/linker
+  transform:
+    ligand_atom_mode: basic
+    ligand_bond_mode: fc
+    random_rot: False
+
+model:
+  checkpoint: ./ckpt/diffleop_linker.pt
+
+affinity_predictor: use
+
+sample:
+  seed: 2024
+  batch_size: 2
+  num_samples: 1
+  num_steps: 1000
