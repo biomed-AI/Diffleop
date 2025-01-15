@@ -37,3 +37,19 @@ Before calculating the binding affinities between molecules and proteins, you sh
 ```bash
 python cal_affinity.py --dataset_dir /path/to/dataset_dir --samples_dir ./outputs/sampling/sdf
 ```
+
+## Sampling for a specific protein pocket and specific fragment(s)
+To generate molecules for your own pocket and fragment(s), you need to provide the pdb structure file of the protein pocket, the sdf file of the fragment(s), and the index of the anchor of the fragment(s). 
+For Example:
+```bash
+python scripts/sample_for_case.py configs/sampling_dec_for_case.yml -i 1 --device cuda:0 --type dec --protein_filename ./data/case/dec/2fjp_A.pdb --ligand_filename ./data/case/dec/retain.sdf --anchor_id_given_1 4
+```
+You can use the following code to visualize the index of the molecule.
+```bash
+from rdkit import Chem
+mol = Chem.SDMolSupplier('/path/to/example.sdf')[0]
+mol.RemoveAllConformers()
+for atom in mol.GetAtoms():
+    atom.SetProp('molAtomMapNumber', str(atom.GetIdx()))
+Chem.Draw.MolToImage(mol, size=(500,500))
+```

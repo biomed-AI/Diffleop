@@ -12,7 +12,7 @@ from tqdm.auto import tqdm
 
 from utils.data import get_pocket
 from utils.data import ProteinLigandData, torchify_dict
-from utils.data_leop import parse_sdf_file_leop
+from utils.data_leop import parse_sdf_file_leop, parse_sdf_file_leo_for_case
 
 def get_dataset_linker_aff(config, **kwargs):
     name = config.name
@@ -35,6 +35,16 @@ def get_dataset_dec_aff(config, **kwargs):
         dataset_test = LeopDataset_dec(root, 'processed_test_dec.lmdb', './data/demo/dec/demo_dict.pt', **kwargs)
     elif name == 'leop_dec_hop':
         dataset_test = LeopDataset_dec(root, 'processed_test_dec_hop.lmdb', './data/demo/dec/demo_dict.pt', **kwargs)
+        dataset_train = None
+    else:
+        raise NotImplementedError('Unknown dataset: %s' % name)
+    return dataset_train, dataset_test
+
+def get_dataset_aff_for_case(config, protein_filename, ligand_filename, anchor_id_given_1, anchor_id_given_2 = None, transform = None):
+    name = config.name
+    root = config.path
+    if name == 'leop_for_case':
+        dataset_test = LeoDataset_for_case(root, 'processed_case.lmdb', protein_filename, ligand_filename, anchor_id_given_1, anchor_id_given_2, transform)
         dataset_train = None
     else:
         raise NotImplementedError('Unknown dataset: %s' % name)
@@ -328,3 +338,131 @@ class LeopDataset_dec(Dataset):
             data = self.transform(data)
         return data
 
+class LeoDataset_for_case(Dataset):
+
+    def __init__(self, root, processed, protein_filename, ligand_filename, anchor_id_given_1, anchor_id_given_2 = None, transform=None):
+        super().__init__()
+        self.root = root
+        
+        self.processed_path = os.path.join(root, processed)
+        self.name2id_path = self.processed_path[:self.processed_path.find('.lmdb')]+'_name2idx.pt'
+        self.protein_filename, self.ligand_filename = protein_filename, ligand_filename
+        self.anchor_id_given_1 = anchor_id_given_1
+        self.anchor_id_given_2 = anchor_id_given_2
+        self.transform = transform
+        self.db = None
+
+        self.keys = None
+
+        # if (not os.path.exists(self.processed_path)) or (not os.path.exists(self.name2id_path)):
+        self._process()
+        self._precompute_name2id()
+
+        self.name2id = torch.load(self.name2id_path)
+
+    def _connect_db(self):
+        """
+            Establish read-only database connection
+        """
+        assert self.db is None, 'A connection has already been opened.'
+        self.db = lmdb.open(
+            self.processed_path,
+            map_size=10*(1024*1024*1024),   # 10GB
+            create=False,
+            subdir=False,
+            readonly=True,
+            lock=False,
+            readahead=False,
+            meminit=False,
+        )
+        with self.db.begin() as txn:
+            self.keys = list(txn.cursor().iternext(values=False))
+
+    def _close_db(self):
+        self.db.close()
+        self.db = None
+        self.keys = None
+
+    def _process(self):
+        db = lmdb.open(
+            self.processed_path,
+            map_size=16*(1024*1024*1024),   # 10GB
+            create=True,
+            subdir=False,
+            readonly=False, # Writable
+        )
+
+        num_skipped = 0
+        with db.begin(write=True, buffers=True) as txn:
+            pocket_fn, ligand_fn = \
+                self.protein_filename, self.ligand_filename
+            try:
+                pocket_path = pocket_fn
+                ligand_path = ligand_fn
+                mol = Chem.MolFromMolFile(ligand_path)
+                mol = Chem.RemoveAllHs(mol)
+                Chem.SanitizeMol(mol)
+                if mol is None:
+                    print('[Error] Mol is None!')
+                pocket_dict = get_pocket(mol, pocket_path)
+
+                ligand_dict = parse_sdf_file_leo_for_case(ligand_path, self.anchor_id_given_1, self.anchor_id_given_2)
+
+                num_ligand_atoms = ligand_dict['num_atoms']
+                # extract pocket atom mask - pocket_atom_masks - None
+
+                data = ProteinLigandData.from_protein_ligand_dicts(
+                    protein_dict=torchify_dict(pocket_dict),
+                    ligand_dict=torchify_dict(ligand_dict),
+                )
+
+                # extract ligand atom mask
+                ligand_atom_mask = torch.zeros(num_ligand_atoms, dtype = int) - 1
+                ligand_atom_mask[data.ligand_mask_mask] = 0
+                data.ligand_atom_mask = ligand_atom_mask
+                
+                data.protein_filename = pocket_fn
+                data.ligand_filename = ligand_fn
+                data.retain_smi = Chem.MolToSmiles(mol)
+                data.mask_smi = ''
+                data.affinity = 0.
+                data = data.to_dict()  # avoid torch_geometric version issue
+                txn.put(
+                    key=str(0).encode(),
+                    value=pickle.dumps(data)
+                )
+            except Exception as e:
+                num_skipped += 1
+                print(e)
+                print('[Error] Unvalid ligand file!')
+                
+        db.close()
+
+    def _precompute_name2id(self):
+        name2id = {}
+        for i in tqdm(range(self.__len__()), 'Indexing'):
+            try:
+                data = self.__getitem__(i)
+            except AssertionError as e:
+                print(i, e)
+                continue
+            name = (data.protein_filename, data.ligand_filename)
+            name2id[name] = i
+        torch.save(name2id, self.name2id_path)
+    
+    def __len__(self):
+        if self.db is None:
+            self._connect_db()
+        return len(self.keys)
+
+    def __getitem__(self, idx):
+        if self.db is None:
+            self._connect_db()
+        key = self.keys[idx]
+        data = pickle.loads(self.db.begin().get(key))
+        data = ProteinLigandData(**data)
+        data.id = idx
+        assert data.protein_pos.size(0) > 0
+        if self.transform is not None:
+            data = self.transform(data)
+        return data

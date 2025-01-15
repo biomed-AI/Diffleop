@@ -15,6 +15,105 @@ ATOM_FAMILIES_ID = {s: i for i, s in enumerate(ATOM_FAMILIES)}
 BOND_TYPES = {t: i for i, t in enumerate(BondType.names.values())}
 BOND_NAMES = {i: t for i, t in enumerate(BondType.names.keys())}
 
+def parse_sdf_file_leo_for_case(ligand_fn, anchor_id_given_1 = None, anchor_id_given_2 = None):
+    
+    fake_atom_num = 20
+
+    mol = next(iter(Chem.SDMolSupplier(ligand_fn, removeHs=True)))
+
+    fdefName = os.path.join(RDConfig.RDDataDir, 'BaseFeatures.fdef')
+    factory = ChemicalFeatures.BuildFeatureFactory(fdefName)
+
+    rd_num_atoms = mol.GetNumAtoms()
+    feat_mat = np.zeros([rd_num_atoms, len(ATOM_FAMILIES)], dtype=np.compat.long)
+    for feat in factory.GetFeaturesForMol(mol):
+        feat_mat[feat.GetAtomIds(), ATOM_FAMILIES_ID[feat.GetFamily()]] = 1
+
+    # Get hybridization in the order of atom idx.
+    hybridization = []
+    for atom in mol.GetAtoms():
+        hybr = str(atom.GetHybridization())
+        idx = atom.GetIdx()
+        hybridization.append((idx, hybr))
+    hybridization = sorted(hybridization)
+    hybridization = [v[1] for v in hybridization]
+
+    mol_smi = Chem.MolToSmiles(mol)
+    retain = mol
+
+    if anchor_id_given_2 is None:
+        anchors_idx_list = [anchor_id_given_1]
+    else:
+        anchors_idx_list = [anchor_id_given_1, anchor_id_given_2]
+
+    retain_pos, retain_ele = parse_molecule(retain)
+    retain_pos = np.array(retain_pos, dtype = np.float32)
+    
+
+    if len(anchors_idx_list) == 1:
+        fake_pos = retain_pos[anchors_idx_list[0]]
+    elif len(anchors_idx_list) == 2:
+        fake_pos = (retain_pos[anchors_idx_list[0]] + retain_pos[anchors_idx_list[1]]) / 2
+
+    mask_pos, mask_ele = parse_mask_for_case(fake_pos, fake_atom_num)
+
+    element = np.concatenate([retain_ele, mask_ele], axis = 0)
+    pos = np.concatenate([retain_pos, mask_pos], axis = 0)
+    element = np.array(element, dtype=np.int)
+    pos = np.array(pos, dtype = np.float32)
+    mask_mask = np.concatenate([np.zeros_like(retain_ele, dtype = np.bool_), np.ones_like(mask_ele, dtype = np.bool_)])
+
+    # anchor feature
+    anchor_feature = np.zeros(element.shape[0])
+    if len(anchors_idx_list) == 1:
+        anchor_feature[anchors_idx_list[0]] = 1
+    elif len(anchors_idx_list) == 2:
+        anchor_feature[anchors_idx_list[0]] = 1
+        anchor_feature[anchors_idx_list[1]] = 1
+
+    row, col, edge_type = [], [], []
+    for bond in retain.GetBonds():
+        b_type = int(bond.GetBondType())
+        assert b_type in [1, 2, 3, 12], 'Bond can only be 1,2,3,12 bond'
+        b_type = b_type if b_type != 12 else 4
+        start = bond.GetBeginAtomIdx()
+        end = bond.GetEndAtomIdx()
+        row += [start, end]
+        col += [end, start]
+        edge_type += 2 * [b_type]
+    edge_index = np.array([row, col], dtype=np.long)
+    edge_type = np.array(edge_type, dtype=np.long)
+    perm = (edge_index[0] * retain.GetNumAtoms() + edge_index[1]).argsort()
+    edge_index_retain = edge_index[:, perm]
+    edge_type_retain = edge_type[perm]
+
+    edge_index = edge_index_retain
+    edge_type = edge_type_retain
+
+    num_atoms = retain_ele.shape[0] + mask_ele.shape[0]
+    num_bonds = edge_type.shape[0] // 2
+
+    data = {
+        'rdmol': mol,
+        'smiles': mol_smi,
+        'element': element,
+        'pos': pos,
+        'bond_index': edge_index,
+        'bond_type': edge_type,
+
+        'atom_feature': feat_mat,
+        'hybridization': hybridization, 
+
+        'num_atoms': num_atoms,
+        'num_bonds': num_bonds,
+
+        'anchor_pos': np.array([fake_pos], dtype = np.float32),
+        'mask_mask': mask_mask,
+
+        'anchor_feature': anchor_feature,
+    }
+    return data
+
 def parse_sdf_file_leop(ligand_fn, retain_smi, mask_smi):
     
     fake_atom_num = 20
@@ -350,4 +449,12 @@ def parse_mask_ta(mol):
     for atom in mol.GetAtoms():
         elements.append(atom.GetAtomicNum())
     positions = mol.GetConformer().GetPositions()
+    return np.array(positions), np.array(elements)
+
+def parse_mask_for_case(fake_pos, fake_atom_num):
+    fake_pos = list(fake_pos)
+    elements = []
+    elements.extend(0 for _ in range(fake_atom_num))
+    positions = []
+    positions.extend(list(fake_pos + np.random.standard_normal(3) * 0.1) for _ in range(fake_atom_num))
     return np.array(positions), np.array(elements)
