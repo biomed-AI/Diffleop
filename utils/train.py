@@ -1,7 +1,3 @@
-# Copyright 2023 ByteDance and/or its affiliates.
-# SPDX-License-Identifier: CC-BY-NC-4.0
-
-
 import copy
 import torch
 from torch_geometric.data import Data, Batch
